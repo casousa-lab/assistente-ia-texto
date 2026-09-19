@@ -1,8 +1,7 @@
-import os
-import json
+import html
 import streamlit as st
 from dotenv import load_dotenv
-from google import genai
+from gemini_processor import analisar_texto
 
 # Configuração da página
 st.set_page_config(
@@ -182,14 +181,6 @@ load_dotenv()
 if "historico" not in st.session_state:
     st.session_state.historico = []
 
-# Conexão da API
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    st.error("Chave API ausente no .env")
-    st.stop()
-
-client = genai.Client(api_key=api_key)
-
 # --- 1. BREADCRUMB SUPERIOR ---
 st.markdown("""
     <div class='top-breadcrumb'>
@@ -233,40 +224,21 @@ if menu_selecionado == "Elements":
                 st.warning("Insira um texto para analisar.")
             else:
                 with st.spinner("Processing..."):
-                    prompt_completo = (
-                        "Você é um assistente especialista em processamento de dados e análise de texto corporativo.\n"
-                        "Sua tarefa é analisar o texto fornecido e retornar ESTRITAMENTE um objeto JSON válido, sem qualquer texto introdutório ou marcadores markdown (como ```json).\n\n"
-                        "O formato da resposta deve ser rigorosamente o seguinte:\n"
-                        "{\n"
-                        '  "resumo": "Um resumo claro e conciso do texto em até 2 frases.",\n'
-                        '  "categoria": "A categoria principal do texto (Ex: Operações, Financeiro, Tecnologia, RH, Vendas)",\n'
-                        '  "palavras_chave": ["tag1", "tag2", "tag3"],\n'
-                        '  "nivel_prioridade": "Alta / Média / Baixa",\n'
-                        '  "acao_recomendada": "Uma sugestão curta de próxima ação baseada no texto."\n'
-                        "}\n\n"
-                        f"Texto para análise:\n{texto_usuario}"
-                    )
-
                     try:
-                        interaction = client.interactions.create(
-                            model="gemini-3.6-flash",
-                            input=prompt_completo
-                        )
-
-                        resposta_texto = interaction.output_text.strip()
-                        if resposta_texto.startswith("```"):
-                            resposta_texto = resposta_texto.split("\n", 1)[-1].rsplit("\n", 1)[0].replace("json", "").strip()
-
-                        dados_json = json.loads(resposta_texto)
+                        dados_json = analisar_texto(texto_usuario)
                         st.session_state.historico.append(dados_json)
 
-                        categoria = dados_json.get("categoria", "N/A")
-                        prioridade = dados_json.get("nivel_prioridade", "Baixa")
-                        
+                        # Escapa tudo que vem do modelo antes de injetar em HTML (proteção contra XSS)
+                        categoria = html.escape(str(dados_json.get("categoria", "N/A")))
+                        prioridade_raw = str(dados_json.get("nivel_prioridade", "Baixa"))
+                        prioridade = html.escape(prioridade_raw)
+                        resumo = html.escape(str(dados_json.get("resumo", "")))
+                        acao = html.escape(str(dados_json.get("acao_recomendada", "")))
+
                         classe_prioridade = "priority-baixa"
-                        if "alta" in prioridade.lower():
+                        if "alta" in prioridade_raw.lower():
                             classe_prioridade = "priority-alta"
-                        elif "média" in prioridade.lower() or "media" in prioridade.lower():
+                        elif "média" in prioridade_raw.lower() or "media" in prioridade_raw.lower():
                             classe_prioridade = "priority-media"
 
                         st.markdown(f"""
@@ -287,18 +259,21 @@ if menu_selecionado == "Elements":
                         st.markdown(f"""
                             <div class='custom-card'>
                                 <div class='card-label'>Resumo Executivo</div>
-                                <div style='font-size: 14px; color: #374151; line-height: 1.6;'>{dados_json.get("resumo", "")}</div>
+                                <div style='font-size: 14px; color: #374151; line-height: 1.6;'>{resumo}</div>
                             </div>
                         """, unsafe_allow_html=True)
 
                         st.markdown(f"""
                             <div class='custom-card'>
                                 <div class='card-label'>Ação Recomendada</div>
-                                <div style='font-size: 14px; color: #111827; font-weight: 500; line-height: 1.6;'>{dados_json.get("acao_recomendada", "")}</div>
+                                <div style='font-size: 14px; color: #111827; font-weight: 500; line-height: 1.6;'>{acao}</div>
                             </div>
                         """, unsafe_allow_html=True)
 
-                        tags_html = "".join([f"<span class='tag-badge'>{tag}</span>" for tag in dados_json.get("palavras_chave", [])])
+                        tags_html = "".join([
+                            f"<span class='tag-badge'>{html.escape(str(tag))}</span>"
+                            for tag in dados_json.get("palavras_chave", [])
+                        ])
                         st.markdown(f"""
                             <div class='custom-card'>
                                 <div class='card-label'>Palavras-chave</div>
